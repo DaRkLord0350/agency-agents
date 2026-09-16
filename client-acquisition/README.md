@@ -2,6 +2,26 @@
 
 A lightweight orchestration layer built around the existing Agency Agents roster.
 
+## Phase 2 — Executable runner
+
+Phase 2 adds a provider-agnostic execution layer. The runner passes structured context from one specialist to the next, records a traceable `AgentRun`, retries transient failures within a bounded limit, and stops at a human approval gate before outreach is sent.
+
+### Run the safe local demo
+
+From the repository root:
+
+```bash
+python client-acquisition/cli.py run-lead --name "Asha" --company "Acme" --email "asha@acme.test"
+```
+
+The local demo executor is deterministic and performs **no network calls**. It produces sample research, qualification, pain-detection and outreach-draft outputs so the orchestration can be tested before connecting a real model provider.
+
+### Runtime flow
+
+`Lead → Research → Qualification → Pain Detection → Outreach Draft → HUMAN APPROVAL`
+
+The runner generates a shared `trace_id`, keeps agent outputs structured, and never sends the outreach draft automatically.
+
 ## Phase 1
 
 Phase 1 establishes the deterministic foundation for a lead-to-client workflow without scraping, sending messages, or performing external side effects.
@@ -50,12 +70,15 @@ client-acquisition/
 │   ├── __init__.py
 │   ├── models.py
 │   ├── registry.py
+│   ├── runner.py
 │   ├── state_machine.py
 │   └── workflow.py
+├── cli.py
 └── tests/
-    └── test_foundation.py
+    ├── test_foundation.py
+    └── test_runner.py
 ```
 
 ## Scope boundary
 
-Phase 1 deliberately does **not** implement LinkedIn scraping, email sending, calendar booking, mass outreach, autonomous sales, or a dashboard. Those integrations should sit behind adapters after the state/contracts foundation is validated.
+Phase 2 deliberately does **not** implement LinkedIn scraping, email sending, calendar booking, mass outreach, autonomous sales, or a dashboard. Those integrations should sit behind adapters after the state/contracts and execution layer are validated.
