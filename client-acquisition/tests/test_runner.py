@@ -10,7 +10,12 @@ from orchestrator.runner import AgentRunner, deterministic_demo_executor
 
 class RunnerTests(unittest.TestCase):
     def test_run_lead_reaches_approval_gate(self):
-        lead = Lead(id="l1", name="Asha", company="Acme", email="asha@acme.test")
+        lead = Lead(
+            id="l1",
+            company_name="Acme",
+            contact_name="Asha",
+            contact_email="asha@acme.test",
+        )
         runner = AgentRunner(deterministic_demo_executor)
 
         result = runner.run_lead(lead)
@@ -32,7 +37,7 @@ class RunnerTests(unittest.TestCase):
                 raise RuntimeError("temporary failure")
             return {"ok": True}
 
-        lead = Lead(id="l2", name="Asha", company="Acme")
+        lead = Lead(id="l2", company_name="Acme", contact_name="Asha")
         runner = AgentRunner(flaky, max_retries=1)
         run = runner.execute(lead, "test_agent", {"trace_id": "t1"})
 
