@@ -9,7 +9,7 @@ from dataclasses import asdict
 from typing import Any, Callable, Dict, List, Optional
 from uuid import uuid4
 
-from .models import AgentRun, Lead, LeadStatus, RunStatus, utc_now
+from .models import AgentRun, Lead, LeadStatus
 from .state_machine import transition
 from .workflow import WorkflowError, run_step
 
@@ -43,10 +43,7 @@ class AgentRunner:
             except WorkflowError as exc:
                 last_error = exc
                 if attempt == self.max_retries:
-                    # run_step has already recorded the failed AgentRun; retain
-                    # the failure in the ledger before surfacing it.
                     raise
-                # Retry is safe because this phase only permits read/draft work.
         raise last_error or WorkflowError("Agent execution failed")
 
     def run_lead(self, lead: Lead) -> Dict[str, Any]:
@@ -64,7 +61,6 @@ class AgentRunner:
         )
         context["research"] = research.output
 
-        # Qualification is kept separate so every handoff is observable.
         qualification = self.execute(
             lead,
             "qualification",
@@ -103,8 +99,9 @@ class AgentRunner:
 def deterministic_demo_executor(agent: str, context: Dict[str, Any]) -> Dict[str, Any]:
     """Safe local executor used by the CLI demo; it never calls an external service."""
     lead = context.get("lead", {})
-    company = lead.get("company") or "Unknown company"
-    name = lead.get("name") or "there"
+    company = lead.get("company_name") or "Unknown company"
+    name = lead.get("contact_name") or "there"
+
     if agent == "company_researcher":
         return {"company": company, "summary": "Demo research only; connect a provider for live research."}
     if agent == "qualification":
@@ -112,5 +109,9 @@ def deterministic_demo_executor(agent: str, context: Dict[str, Any]) -> Dict[str
     if agent == "pain_detector":
         return {"pain_points": [], "confidence": 0.0, "note": "No live evidence in demo mode."}
     if agent == "outbound_strategy":
-        return {"subject": f"Idea for {company}", "body": f"Hi {name},\n\nI noticed an opportunity to improve an operational workflow at {company}.\n\nWould a short conversation be useful?", "send": False}
+        return {
+            "subject": f"Idea for {company}",
+            "body": f"Hi {name},\n\nI noticed an opportunity to improve an operational workflow at {company}.\n\nWould a short conversation be useful?",
+            "send": False,
+        }
     raise ValueError(f"Unknown capability: {agent}")
