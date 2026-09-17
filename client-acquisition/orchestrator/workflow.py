@@ -1,4 +1,4 @@
-"""Phase 1 lead workflow orchestration.
+"""Phase 1/2 lead workflow orchestration.
 
 Agent execution is intentionally injected as a callable. This keeps the core
 workflow independent of a particular LLM provider or agent runtime.
@@ -23,7 +23,11 @@ def run_step(
     executor: AgentExecutor,
     context: Dict[str, Any],
 ) -> AgentRun:
+    """Execute one agent step while preserving the workflow trace ID."""
+    trace_id = context.get("trace_id")
     run = AgentRun(agent=capability, lead_id=lead.id, input=context)
+    if trace_id:
+        run.trace_id = str(trace_id)
     run.status = RunStatus.RUNNING
     run.started_at = utc_now()
 
@@ -49,9 +53,9 @@ def prepare_research(lead: Lead, executor: AgentExecutor) -> AgentRun:
     transition(lead, LeadStatus.RESEARCHING)
     return run_step(
         lead,
-        "qualification",
+        "company_researcher",
         executor,
-        {"lead": asdict(lead), "objective": "research_and_qualify"},
+        {"lead": asdict(lead), "objective": "research_company_and_contact"},
     )
 
 
