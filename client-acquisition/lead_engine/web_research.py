@@ -9,12 +9,16 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from html.parser import HTMLParser
 import re
-from typing import Iterable, List, Optional
-from urllib.parse import parse_qs, quote_plus, unquote, urljoin, urlparse
+from typing import List, Optional
+from urllib.parse import parse_qs, quote_plus, unquote, urlparse
 from urllib.request import Request, urlopen
 
 
-USER_AGENT = "ClientAcquisitionOS/0.1 (+public-research; local operator tool)"
+USER_AGENT = "ClientAcquisitionOS/0.2 (+public-research; local operator tool)"
+SEARCH_ENDPOINTS = (
+    "https://html.duckduckgo.com/html/?q=",
+    "https://lite.duckduckgo.com/lite/?q=",
+)
 
 
 @dataclass
@@ -34,6 +38,15 @@ class EvidenceItem:
 
 
 class _SearchParser(HTMLParser):
+    """Parse both DuckDuckGo HTML and Lite result markup.
+
+    DDG has changed its result markup over time. Keep the parser deliberately
+    permissive so a markup change does not turn into a false ``0 sources``.
+    """
+
+    RESULT_LINK_CLASSES = {"result__a", "result-link"}
+    SNIPPET_CLASSES = {"result__snippet", "result-snippet"}
+
     def __init__(self) -> None:
         super().__init__()
         self.results: List[SearchResult] = []
@@ -42,16 +55,21 @@ class _SearchParser(HTMLParser):
         self._snippet_parts: List[str] = []
         self._in_title = False
         self._in_snippet = False
+        self._snippet_target: Optional[SearchResult] = None
 
     def handle_starttag(self, tag: str, attrs) -> None:
         attrs_map = dict(attrs)
         classes = set((attrs_map.get("class") or "").split())
-        if tag == "a" and "result__a" in classes:
+
+        if tag == "a" and classes & self.RESULT_LINK_CLASSES:
             self._href = attrs_map.get("href")
             self._title_parts = []
             self._in_title = True
-        elif tag in {"a", "div"} and "result__snippet" in classes:
+            return
+
+        if classes & self.SNIPPET_CLASSES:
             self._snippet_parts = []
+            self._snippet_target = self.results[-1] if self.results else None
             self._in_snippet = True
 
     def handle_endtag(self, tag: str) -> None:
@@ -65,9 +83,14 @@ class _SearchParser(HTMLParser):
                 )
             self._href = None
             self._in_title = False
-        elif tag in {"a", "div"} and self._in_snippet:
-            if self.results and self._snippet_parts:
-                self.results[-1].snippet = " ".join(self._snippet_parts).strip()
+            return
+
+        if self._in_snippet and tag in {"a", "div", "td", "p"}:
+            snippet = " ".join(self._snippet_parts).strip()
+            if snippet and self._snippet_target is not None:
+                self._snippet_target.snippet = snippet
+            self._snippet_parts = []
+            self._snippet_target = None
             self._in_snippet = False
 
     def handle_data(self, data: str) -> None:
@@ -89,12 +112,7 @@ def _clean_ddg_url(url: str) -> str:
     return url
 
 
-def search_public_web(query: str, max_results: int = 5, timeout: int = 12) -> List[SearchResult]:
-    """Search DuckDuckGo's public HTML endpoint without an API key."""
-    url = "https://html.duckduckgo.com/html/?q=" + quote_plus(query)
-    request = Request(url, headers={"User-Agent": USER_AGENT})
-    with urlopen(request, timeout=timeout) as response:
-        html = response.read().decode("utf-8", errors="replace")
+def _parse_search_html(html: str, max_results: int) -> List[SearchResult]:
     parser = _SearchParser()
     parser.feed(html)
     results: List[SearchResult] = []
@@ -110,6 +128,36 @@ def search_public_web(query: str, max_results: int = 5, timeout: int = 12) -> Li
         if len(results) >= max_results:
             break
     return results
+
+
+def _fetch_search_endpoint(endpoint: str, query: str, timeout: int) -> List[SearchResult]:
+    url = endpoint + quote_plus(query)
+    request = Request(url, headers={"User-Agent": USER_AGENT})
+    with urlopen(request, timeout=timeout) as response:
+        html = response.read().decode("utf-8", errors="replace")
+    return _parse_search_html(html, max_results=20)
+
+
+def search_public_web(query: str, max_results: int = 5, timeout: int = 12) -> List[SearchResult]:
+    """Search public web results without an API key, with provider fallback.
+
+    The first provider is DDG HTML. If it fails or returns no parseable
+    results, DDG Lite is tried before returning an explicit error to the
+    caller. A successful HTTP response with zero parsed results is treated as
+    a provider/markup failure rather than as proof that the query has no hits.
+    """
+    errors: List[str] = []
+    for endpoint in SEARCH_ENDPOINTS:
+        try:
+            results = _fetch_search_endpoint(endpoint, query, timeout)
+            if results:
+                return results[:max_results]
+            errors.append(f"{endpoint}: HTTP response contained no parseable results")
+        except Exception as exc:
+            errors.append(f"{endpoint}: {exc}")
+
+    detail = "; ".join(errors)
+    raise RuntimeError(f"public search unavailable for query {query!r}: {detail}")
 
 
 class _PageTextParser(HTMLParser):
