@@ -1,84 +1,85 @@
-# Client Acquisition OS
+# Private Client Acquisition OS
 
-A lightweight orchestration layer built around the existing Agency Agents roster.
+This directory is a private operator layer around the existing Agency Agents repository. It is for local use by the owner, not a new agent marketplace or SaaS product.
 
-## Phase 2 — Executable runner
+## What we are building
 
-Phase 2 adds a provider-agnostic execution layer. The runner passes structured context from one specialist to the next, records a traceable `AgentRun`, retries transient failures within a bounded limit, and stops at a human approval gate before outreach is sent.
+```text
+Prospect list
+  -> evidence collection
+  -> company research
+  -> qualification
+  -> pain detection
+  -> personalized audit angle
+  -> outreach draft
+  -> HUMAN APPROVAL
+  -> manual/approved sending
+  -> reply/discovery
+  -> proposal
+  -> won client
+```
 
-### Run the safe local demo
+The existing specialist markdown files remain the workforce. This layer supplies state, contracts, execution, tracing, local lead intake and approval boundaries.
 
-From the repository root:
+## Current status
+
+- Phase 1 foundation: complete
+- Phase 2 executable deterministic runner: complete
+- Phase 3 real model adapter + CSV lead intake: added on this same branch
+- Network side effects: still disabled by default
+
+## Local setup
+
+No Python packages are required for the core runner. Use Python 3.10+.
+
+Copy `.env.example` to `.env` and set an OpenAI-compatible provider if you want real model execution. The adapter expects a `/chat/completions` endpoint.
+
+Required values:
+
+```text
+LLM_BASE_URL=https://api.openai.com/v1
+LLM_API_KEY=your-key
+LLM_MODEL=your-model
+```
+
+Do not commit `.env` or API keys.
+
+## Run a single lead
+
+Demo mode (no network):
 
 ```bash
 python client-acquisition/cli.py run-lead --name "Asha" --company "Acme" --email "asha@acme.test"
 ```
 
-The local demo executor is deterministic and performs **no network calls**. It produces sample research, qualification, pain-detection and outreach-draft outputs so the orchestration can be tested before connecting a real model provider.
+Real model mode:
 
-### Runtime flow
-
-`Lead → Research → Qualification → Pain Detection → Outreach Draft → HUMAN APPROVAL`
-
-The runner generates a shared `trace_id`, keeps agent outputs structured, and never sends the outreach draft automatically.
-
-## Phase 1
-
-Phase 1 establishes the deterministic foundation for a lead-to-client workflow without scraping, sending messages, or performing external side effects.
-
-### Lifecycle
-
-`NEW → RESEARCHING → QUALIFIED → READY_FOR_OUTREACH → OUTREACH_PENDING_APPROVAL → CONTACTED → REPLIED → INTERESTED → MEETING_BOOKED → PROPOSAL_SENT → WON/LOST`
-
-### Design principles
-
-- Reuse existing Agency Agents instead of duplicating specialist prompts.
-- Pass structured state between agents rather than raw conversation transcripts.
-- Keep orchestration deterministic; agents produce decisions, but the state machine enforces valid transitions.
-- External side effects require an explicit approval gate.
-- Every agent invocation has a traceable run record.
-- Failures degrade to a structured error state rather than silently disappearing.
-
-## Agent mapping
-
-| Workflow role | Agency Agent |
-|---|---|
-| Lead generation | `sales/sales-offer-lead-gen-strategist.md` |
-| Outbound strategy | `sales/sales-outbound-strategist.md` |
-| Discovery / qualification | `sales/sales-discovery-coach.md` |
-| Deal strategy | `sales/sales-deal-strategist.md` |
-| Technical scoping | `sales/sales-engineer.md` |
-| Pipeline analysis | `sales/sales-pipeline-analyst.md` |
-| Proposal | `sales/sales-proposal-strategist.md` |
-| Multi-agent orchestration | `engineering/engineering-multi-agent-systems-architect.md` |
-| Delivery architecture | `engineering/engineering-software-architect.md` |
-| Backend delivery | `engineering/engineering-backend-architect.md` |
-
-## Structure
-
-```text
-client-acquisition/
-├── README.md
-├── config/
-│   └── agents.json
-├── schemas/
-│   ├── lead.schema.json
-│   ├── research.schema.json
-│   ├── outreach.schema.json
-│   └── agent-run.schema.json
-├── orchestrator/
-│   ├── __init__.py
-│   ├── models.py
-│   ├── registry.py
-│   ├── runner.py
-│   ├── state_machine.py
-│   └── workflow.py
-├── cli.py
-└── tests/
-    ├── test_foundation.py
-    └── test_runner.py
+```bash
+python client-acquisition/cli.py run-lead --name "Asha" --company "Acme" --website "https://example.com" --evidence "Shopify store; hiring operations manager; Instagram profile URL"
 ```
 
-## Scope boundary
+Then add `--provider llm`.
 
-Phase 2 deliberately does **not** implement LinkedIn scraping, email sending, calendar booking, mass outreach, autonomous sales, or a dashboard. Those integrations should sit behind adapters after the state/contracts and execution layer are validated.
+## Run a lead CSV
+
+Use `client-acquisition/data/leads.example.csv` as the template. Important columns are:
+
+`company_name,contact_name,contact_email,website,source,evidence`
+
+Run:
+
+```bash
+python client-acquisition/cli.py run-csv client-acquisition/data/leads.example.csv --provider demo
+```
+
+The CSV runner prints one JSON result per lead and never sends outreach.
+
+## Evidence-first rule
+
+The model must not invent company facts. Every research claim should be tied to supplied evidence. For live research, a future adapter can feed verified search/page evidence into the same context without changing the orchestration layer.
+
+## Client strategy
+
+The first offer is intentionally narrow: ecommerce/D2C operations automation. We look for businesses showing operational complexity (multiple channels, large catalogs, manual reporting, support/order workload, spreadsheet-heavy processes, or similar public signals) and sell a concrete business outcome rather than "AI agents".
+
+The acquisition system should help create a small number of high-quality, evidence-backed conversations. Human approval remains mandatory before outbound communication.

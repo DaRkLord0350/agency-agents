@@ -1,9 +1,11 @@
 {
-  "version": "1.0",
+  "version": "1.1",
   "agents": {
     "lead_generation": "sales/sales-offer-lead-gen-strategist.md",
+    "company_researcher": "research/research-synthesist.md",
     "outbound_strategy": "sales/sales-outbound-strategist.md",
     "qualification": "sales/sales-discovery-coach.md",
+    "pain_detector": "research/research-synthesist.md",
     "deal_strategy": "sales/sales-deal-strategist.md",
     "technical_scoping": "sales/sales-engineer.md",
     "pipeline_analysis": "sales/sales-pipeline-analyst.md",

@@ -37,6 +37,7 @@ env/
 venv/
 ENV/
 .venv
+.env
 
 # Logs
 *.log
@@ -64,8 +65,6 @@ TODO.md
 NOTES.md
 
 # Generated integration files — run scripts/convert.sh to regenerate locally
-# The scripts/ and integrations/*/README.md files ARE committed; only generated
-# agent/skill files are excluded.
 integrations/antigravity/agency-*/
 integrations/gemini-cli/skills/
 integrations/gemini-cli/gemini-extension.json
@@ -75,8 +74,6 @@ integrations/cursor/rules/
 integrations/aider/CONVENTIONS.md
 integrations/windsurf/.windsurfrules
 integrations/openclaw/*
-integrations/qwen/agents/
-integrations/kimi/*/
 !integrations/openclaw/README.md
 !integrations/kimi/README.md
 integrations/codex/agents/*
