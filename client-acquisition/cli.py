@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from lead_engine.csv_loader import load_leads
+from lead_engine.web_research import research_company
 from orchestrator.models import Lead
 from orchestrator.runner import AgentRunner, deterministic_demo_executor
 from orchestrator.llm_executor import LLMExecutor
@@ -54,33 +55,66 @@ def build_parser() -> argparse.ArgumentParser:
     run = sub.add_parser("run-lead", help="run one lead")
     add_lead_args(run)
     run.add_argument("--provider", choices=["demo", "llm"], default="demo")
+    run.add_argument("--web-research", action="store_true", help="collect public web evidence before the LLM workflow")
+    run.add_argument("--max-sources", type=int, default=8, help="maximum public sources to collect")
+
+    research = sub.add_parser("research-lead", help="collect public evidence for one lead")
+    research.add_argument("--company", required=True, help="company name")
+    research.add_argument("--name", default=None, help="contact name")
+    research.add_argument("--max-sources", type=int, default=8, help="maximum public sources to collect")
 
     batch = sub.add_parser("run-csv", help="run a CSV of leads")
     batch.add_argument("path", help="CSV path")
     batch.add_argument("--provider", choices=["demo", "llm"], default="demo")
+    batch.add_argument("--web-research", action="store_true", help="research each lead publicly before execution")
+    batch.add_argument("--max-sources", type=int, default=8, help="maximum public sources per lead")
     return parser
 
 
 def lead_from_args(args) -> Lead:
+    evidence = args.evidence or ""
+    metadata = {"evidence": evidence} if evidence else {}
     kwargs = {
         "company_name": args.company,
         "contact_name": args.name,
         "contact_email": args.email,
         "website": args.website,
         "source": args.source,
-        "metadata": {"evidence": args.evidence} if args.evidence else {},
+        "metadata": metadata,
     }
     if args.id:
         kwargs["id"] = args.id
     return Lead(**kwargs)
 
 
+def enrich_lead_with_web_research(lead: Lead, max_sources: int) -> Lead:
+    bundle = research_company(lead.company_name, lead.contact_name, max_sources=max_sources)
+    lead.metadata["web_research"] = bundle
+    public_lines = []
+    for item in bundle.get("evidence", []):
+        public_lines.append(
+            f"SOURCE: {item.get('source_title', '')} | URL: {item.get('source_url', '')}\n"
+            f"EVIDENCE: {item.get('snippet', '')}"
+        )
+    existing = lead.metadata.get("evidence", "")
+    lead.metadata["evidence"] = (existing + "\n\n" if existing else "") + "\n\n".join(public_lines)
+    return lead
+
+
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        if args.command == "research-lead":
+            result = research_company(args.company, args.name, max_sources=args.max_sources)
+            print(json.dumps(result, indent=2, default=str))
+            return 0
+
         runner = build_runner(args.provider)
         if args.command == "run-lead":
-            result = runner.run_lead(lead_from_args(args))
+            lead = lead_from_args(args)
+            if args.web_research:
+                lead = enrich_lead_with_web_research(lead, args.max_sources)
+            result = runner.run_lead(lead)
             print(json.dumps(result, indent=2, default=str))
             print("\nHUMAN APPROVAL REQUIRED: outreach has been drafted but not sent.", file=sys.stderr)
             return 0
@@ -88,6 +122,8 @@ def main(argv=None) -> int:
         if args.command == "run-csv":
             leads = load_leads(Path(args.path))
             for lead in leads:
+                if args.web_research:
+                    lead = enrich_lead_with_web_research(lead, args.max_sources)
                 result = runner.run_lead(lead)
                 print(json.dumps(result, default=str))
                 print(f"Processed {lead.company_name}: {result['status']}", file=sys.stderr)
