@@ -24,10 +24,10 @@ def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "run-lead":
         lead = Lead(
-            id=args.id or "demo-lead",
-            name=args.name,
-            company=args.company,
-            email=args.email,
+            id=args.id or "demo-lead",    
+            company_name=args.company,
+            contact_name=args.name,
+            contact_email=args.email,
         )
         runner = AgentRunner(deterministic_demo_executor)
         result = runner.run_lead(lead)

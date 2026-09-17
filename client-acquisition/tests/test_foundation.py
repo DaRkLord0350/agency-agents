@@ -2,12 +2,16 @@ import sys
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+SOURCE_ROOT = Path(__file__).resolve().parents[1]
+# sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(SOURCE_ROOT))
 
-from client_acquisition.orchestrator.models import Lead, LeadStatus
-from client_acquisition.orchestrator.registry import AGENT_REGISTRY, get_agent_path
-from client_acquisition.orchestrator.state_machine import InvalidTransition, can_transition, transition
-
+# from client_acquisition.orchestrator.models import Lead, LeadStatus
+# from client_acquisition.orchestrator.registry import AGENT_REGISTRY, get_agent_path
+# from client_acquisition.orchestrator.state_machine import InvalidTransition, can_transition, transition
+from orchestrator.models import Lead, LeadStatus
+from orchestrator.registry import AGENT_REGISTRY, get_agent_path
+from orchestrator.state_machine import InvalidTransition, can_transition, transition
 
 class FoundationTests(unittest.TestCase):
     def test_new_lead_can_enter_research(self):
