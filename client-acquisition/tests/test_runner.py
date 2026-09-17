@@ -28,6 +28,9 @@ class RunnerTests(unittest.TestCase):
         )
         self.assertFalse(result["runs"][-1]["output"]["send"])
 
+        trace_ids = {run["trace_id"] for run in result["runs"]}
+        self.assertEqual(trace_ids, {result["trace_id"]})
+
     def test_runner_retries_transient_failure(self):
         attempts = {"count": 0}
 
@@ -42,6 +45,7 @@ class RunnerTests(unittest.TestCase):
         run = runner.execute(lead, "test_agent", {"trace_id": "t1"})
 
         self.assertEqual(run.output, {"ok": True})
+        self.assertEqual(run.trace_id, "t1")
         self.assertEqual(attempts["count"], 2)
 
 
