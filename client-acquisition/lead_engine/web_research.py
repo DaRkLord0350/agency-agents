@@ -12,13 +12,14 @@ import re
 from typing import List, Optional
 from urllib.parse import parse_qs, quote_plus, unquote, urlparse
 from urllib.request import Request, urlopen
+import xml.etree.ElementTree as ET
 
 
-USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36 ClientAcquisitionOS/0.3"
+USER_AGENT = "ClientAcquisitionOS/0.2 (+public-research; local operator tool)"
 SEARCH_ENDPOINTS = (
-    "https://www.bing.com/search?format=rss&q=",
-    "https://html.duckduckgo.com/html/?q=",
-    "https://lite.duckduckgo.com/lite/?q=",
+    ("bing_rss", "https://www.bing.com/search?format=rss&q="),
+    ("duckduckgo_html", "https://html.duckduckgo.com/html/?q="),
+    ("duckduckgo_lite", "https://lite.duckduckgo.com/lite/?q="),
 )
 
 
@@ -40,7 +41,11 @@ class EvidenceItem:
 
 
 class _SearchParser(HTMLParser):
-    """Parse both DuckDuckGo HTML and Lite result markup."""
+    """Parse both DuckDuckGo HTML and Lite result markup.
+
+    DDG has changed its result markup over time. Keep the parser deliberately
+    permissive so a markup change does not turn into a false ``0 sources``.
+    """
 
     RESULT_LINK_CLASSES = {"result__a", "result-link"}
     SNIPPET_CLASSES = {"result__snippet", "result-snippet"}
@@ -73,7 +78,12 @@ class _SearchParser(HTMLParser):
     def handle_endtag(self, tag: str) -> None:
         if tag == "a" and self._in_title:
             if self._href:
-                self.results.append(SearchResult(title=" ".join(self._title_parts).strip(), url=self._href))
+                self.results.append(
+                    SearchResult(
+                        title=" ".join(self._title_parts).strip(),
+                        url=self._href,
+                    )
+                )
             self._href = None
             self._in_title = False
             return
@@ -96,7 +106,7 @@ class _SearchParser(HTMLParser):
             self._snippet_parts.append(text)
 
 
-def _clean_redirect_url(url: str) -> str:
+def _clean_ddg_url(url: str) -> str:
     parsed = urlparse(url)
     if parsed.path.startswith("/l/"):
         target = parse_qs(parsed.query).get("uddg", [None])[0]
@@ -105,11 +115,7 @@ def _clean_redirect_url(url: str) -> str:
     return url
 
 
-def _clean_ddg_url(url: str) -> str:
-    return _clean_redirect_url(url)
-
-
-def _parse_search_html(html: str, max_results: int, provider: str = "duckduckgo") -> List[SearchResult]:
+def _parse_search_html(html: str, max_results: int) -> List[SearchResult]:
     parser = _SearchParser()
     parser.feed(html)
     results: List[SearchResult] = []
@@ -121,7 +127,6 @@ def _parse_search_html(html: str, max_results: int, provider: str = "duckduckgo"
             continue
         seen.add(clean)
         result.url = clean
-        result.provider = provider
         results.append(result)
         if len(results) >= max_results:
             break
@@ -129,23 +134,18 @@ def _parse_search_html(html: str, max_results: int, provider: str = "duckduckgo"
 
 
 def _parse_bing_rss(xml_text: str, max_results: int) -> List[SearchResult]:
-    """Parse Bing RSS without external dependencies."""
+    root = ET.fromstring(xml_text)
     results: List[SearchResult] = []
     seen = set()
-    item_blocks = re.findall(r"<item>(.*?)</item>", xml_text, flags=re.IGNORECASE | re.DOTALL)
-    for block in item_blocks:
-        title_match = re.search(r"<title>(.*?)</title>", block, flags=re.IGNORECASE | re.DOTALL)
-        link_match = re.search(r"<link>(.*?)</link>", block, flags=re.IGNORECASE | re.DOTALL)
-        desc_match = re.search(r"<description>(.*?)</description>", block, flags=re.IGNORECASE | re.DOTALL)
-        if not title_match or not link_match:
+    for item in root.findall(".//item"):
+        title = " ".join((item.findtext("title") or "").split())
+        url = (item.findtext("link") or "").strip()
+        snippet = " ".join((item.findtext("description") or "").split())
+        if not title or not url:
             continue
-        title = re.sub(r"<[^>]+>", "", title_match.group(1)).strip()
-        url = re.sub(r"<[^>]+>", "", link_match.group(1)).strip()
-        snippet = ""
-        if desc_match:
-            snippet = re.sub(r"<[^>]+>", "", desc_match.group(1)).strip()
-        url = _clean_redirect_url(url)
-        if not urlparse(url).netloc or url in seen:
+        url = _clean_ddg_url(url)
+        host = urlparse(url).netloc.lower()
+        if not host or url in seen:
             continue
         seen.add(url)
         results.append(SearchResult(title=title, url=url, snippet=snippet, provider="bing_rss"))
@@ -165,24 +165,76 @@ def _fetch_search_endpoint(endpoint: str, query: str, timeout: int) -> List[Sear
         },
     )
     with urlopen(request, timeout=timeout) as response:
-        content_type = (response.headers.get("Content-Type") or "").lower()
         body = response.read().decode("utf-8", errors="replace")
+        content_type = response.headers.get("Content-Type", "").lower()
 
-    if "rss" in endpoint or "format=rss" in endpoint or "application/rss+xml" in content_type or body.lstrip().startswith("<?xml"):
-        return _parse_bing_rss(body, max_results=20)
-    return _parse_search_html(body, max_results=20, provider="duckduckgo")
+    if endpoint.startswith("https://www.bing.com") or "xml" in content_type:
+        try:
+            return _parse_bing_rss(body, max_results=20)
+        except ET.ParseError:
+            return []
+    return _parse_search_html(body, max_results=20)
+
+
+_BLOCKED_HOSTS = {
+    "maps.google.com",
+    "streetviewstudio.maps.google.com",
+    "contentpartners.maps.google.com",
+}
+
+
+def _query_terms(query: str) -> List[str]:
+    quoted = re.findall(r'"([^"]+)"', query.lower())
+    if quoted:
+        return [term.strip() for term in quoted if len(term.strip()) >= 3]
+    return [term for term in re.findall(r"[a-z0-9]+", query.lower()) if len(term) >= 3]
+
+
+def _is_relevant_result(result: SearchResult, query: str) -> bool:
+    host = urlparse(result.url).netloc.lower().split(":", 1)[0]
+    if host in _BLOCKED_HOSTS or host.endswith(".googleusercontent.com"):
+        return False
+
+    haystack = " ".join((result.title, result.url, result.snippet)).lower()
+    terms = _query_terms(query)
+    if not terms:
+        return True
+
+    # For quoted company/contact searches, require at least one quoted identity
+    # term in the returned title, URL, or snippet. This prevents generic search
+    # noise (for example Google Maps utility pages) from becoming evidence.
+    return any(term in haystack for term in terms)
+
+
+def _filter_relevant_results(results: List[SearchResult], query: str, max_results: int) -> List[SearchResult]:
+    filtered: List[SearchResult] = []
+    seen = set()
+    for result in results:
+        if not _is_relevant_result(result, query):
+            continue
+        if result.url in seen:
+            continue
+        seen.add(result.url)
+        filtered.append(result)
+        if len(filtered) >= max_results:
+            break
+    return filtered
 
 
 def search_public_web(query: str, max_results: int = 5, timeout: int = 12) -> List[SearchResult]:
-    """Search public web results without an API key, trying multiple providers."""
+    """Search public web results with provider fallback and relevance filtering."""
     errors: List[str] = []
-    for endpoint in SEARCH_ENDPOINTS:
-        provider = "bing_rss" if "bing.com" in endpoint else "duckduckgo"
+    for provider, endpoint in SEARCH_ENDPOINTS:
         try:
             results = _fetch_search_endpoint(endpoint, query, timeout)
-            if results:
-                return results[:max_results]
-            errors.append(f"{provider}: HTTP response contained no parseable results")
+            results = [
+                SearchResult(r.title, r.url, r.snippet, provider)
+                for r in results
+            ]
+            relevant = _filter_relevant_results(results, query, max_results)
+            if relevant:
+                return relevant
+            errors.append(f"{provider}: response had no relevant parseable results")
         except Exception as exc:
             errors.append(f"{provider}: {exc}")
 
@@ -219,7 +271,7 @@ class _PageTextParser(HTMLParser):
 
 
 def fetch_public_page(url: str, max_chars: int = 9000, timeout: int = 12) -> str:
-    request = Request(url, headers={"User-Agent": USER_AGENT, "Accept-Language": "en-US,en;q=0.9"})
+    request = Request(url, headers={"User-Agent": USER_AGENT})
     with urlopen(request, timeout=timeout) as response:
         content_type = response.headers.get("Content-Type", "")
         if "text/html" not in content_type and "text/plain" not in content_type:
@@ -273,9 +325,23 @@ def research_company(company: str, contact: Optional[str] = None, max_sources: i
             text = ""
         if text:
             pages.append({"title": result.title, "url": result.url, "text": text})
-            evidence.append(EvidenceItem(claim_context=f"Public page discovered for {company}", source_url=result.url, source_title=result.title, snippet=text[:2500]))
+            evidence.append(
+                EvidenceItem(
+                    claim_context=f"Public page discovered for {company}",
+                    source_url=result.url,
+                    source_title=result.title,
+                    snippet=text[:2500],
+                )
+            )
         elif result.snippet:
-            evidence.append(EvidenceItem(claim_context=f"Search result mentioning {company}", source_url=result.url, source_title=result.title, snippet=result.snippet))
+            evidence.append(
+                EvidenceItem(
+                    claim_context=f"Search result mentioning {company}",
+                    source_url=result.url,
+                    source_title=result.title,
+                    snippet=result.snippet,
+                )
+            )
 
     return {
         "company": company,
