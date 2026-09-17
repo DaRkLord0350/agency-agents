@@ -14,7 +14,9 @@ class Phase3FoundationTests(unittest.TestCase):
         catalog = AgentCatalog(ROOT)
         self.assertIn("company_researcher", catalog.mapping)
         self.assertIn("outbound_strategy", catalog.mapping)
-        self.assertIn("Agency", catalog.load("outbound_strategy"))
+        persona = catalog.load("outbound_strategy")
+        self.assertIn("Outbound Strategist", persona)
+        self.assertIn("signal-based outbound", persona)
 
     def test_csv_loader_preserves_verified_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
