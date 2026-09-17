@@ -41,11 +41,7 @@ class EvidenceItem:
 
 
 class _SearchParser(HTMLParser):
-    """Parse both DuckDuckGo HTML and Lite result markup.
-
-    DDG has changed its result markup over time. Keep the parser deliberately
-    permissive so a markup change does not turn into a false ``0 sources``.
-    """
+    """Parse both DuckDuckGo HTML/Lite and generic search-result anchors."""
 
     RESULT_LINK_CLASSES = {"result__a", "result-link"}
     SNIPPET_CLASSES = {"result__snippet", "result-snippet"}
@@ -106,6 +102,45 @@ class _SearchParser(HTMLParser):
             self._snippet_parts.append(text)
 
 
+class _GenericLinkParser(HTMLParser):
+    """Last-resort parser for providers that changed result CSS classes."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.results: List[SearchResult] = []
+        self._href: Optional[str] = None
+        self._parts: List[str] = []
+        self._depth = 0
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        if tag != "a":
+            return
+        href = dict(attrs).get("href")
+        if not href or not href.startswith(("http://", "https://", "/")):
+            return
+        self._href = href
+        self._parts = []
+        self._depth = 1
+
+    def handle_startendtag(self, tag: str, attrs) -> None:
+        return
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "a" and self._href is not None:
+            title = " ".join(self._parts).strip()
+            if title:
+                self.results.append(SearchResult(title=title, url=self._href))
+            self._href = None
+            self._parts = []
+            self._depth = 0
+
+    def handle_data(self, data: str) -> None:
+        if self._href is not None:
+            text = " ".join(data.split())
+            if text:
+                self._parts.append(text)
+
+
 def _clean_ddg_url(url: str) -> str:
     parsed = urlparse(url)
     if parsed.path.startswith("/l/"):
@@ -118,10 +153,23 @@ def _clean_ddg_url(url: str) -> str:
 def _parse_search_html(html: str, max_results: int) -> List[SearchResult]:
     parser = _SearchParser()
     parser.feed(html)
+    parsed = parser.results
+
+    # Search providers frequently change CSS classes or return a lightweight
+    # variant. If the known selectors produced nothing, fall back to ordinary
+    # result-like links and let the identity relevance filter decide what is
+    # evidence. This avoids false zero-source failures caused by markup drift.
+    if not parsed:
+        generic = _GenericLinkParser()
+        generic.feed(html)
+        parsed = generic.results
+
     results: List[SearchResult] = []
     seen = set()
-    for result in parser.results:
+    for result in parsed:
         clean = _clean_ddg_url(result.url)
+        if clean.startswith("/"):
+            clean = "https://www.bing.com" + clean
         host = urlparse(clean).netloc.lower()
         if not host or clean in seen:
             continue
@@ -184,9 +232,6 @@ _BLOCKED_HOSTS = {
 
 
 def _identity_terms(query: str) -> List[str]:
-    # Generated queries intentionally quote company/contact identity. Use only
-    # those quoted identity terms for prefiltering; search intent terms are
-    # useful to the provider but are too brittle for result-level validation.
     quoted = re.findall(r'"([^"]+)"', query.lower())
     return [term.strip() for term in quoted if len(term.strip()) >= 3]
 
@@ -200,9 +245,6 @@ def _is_relevant_result(result: SearchResult, query: str) -> bool:
     if not identity_terms:
         return True
 
-    # Company/contact identity may appear in title, URL, or snippet. Do not
-    # require every query token because providers routinely omit intent words
-    # from result metadata even when ranking the correct page.
     haystack = " ".join((result.title, result.url, result.snippet)).lower()
     return any(term in haystack for term in identity_terms)
 
@@ -228,10 +270,7 @@ def search_public_web(query: str, max_results: int = 5, timeout: int = 12) -> Li
     for provider, endpoint in SEARCH_ENDPOINTS:
         try:
             results = _fetch_search_endpoint(endpoint, query, timeout)
-            results = [
-                SearchResult(r.title, r.url, r.snippet, provider)
-                for r in results
-            ]
+            results = [SearchResult(r.title, r.url, r.snippet, provider) for r in results]
             relevant = _filter_relevant_results(results, query, max_results)
             if relevant:
                 return relevant
