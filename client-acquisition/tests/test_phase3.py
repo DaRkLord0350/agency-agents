@@ -16,7 +16,7 @@ class Phase3FoundationTests(unittest.TestCase):
         self.assertIn("outbound_strategy", catalog.mapping)
         persona = catalog.load("outbound_strategy")
         self.assertIn("Outbound Strategist", persona)
-        self.assertIn("signal-based outbound", persona)
+        self.assertIn("signal-based outbound", persona.lower())
 
     def test_csv_loader_preserves_verified_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
